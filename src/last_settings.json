@@ -1,0 +1,19 @@
+{
+    "iperf_server": "10.255.174.125",
+    "iperf_port": "55022",
+    "iperf_bw": "1M",
+    "iperf_time": "3600",
+    "tcp_parallel": "4",
+    "tcp_window": "64KB",
+    "udp_len": "1450",
+    "ping_target": "10.255.174.125",
+    "ping_targetterval": "1",
+    "use_iperf": true,
+    "use_ping": true,
+    "use_wireshark": true,
+    "chk_custom_icmp_id": false,
+    "icmp_id_in_value": "1234",
+    "auto_upload": true,
+    "ws_iface_index": 6,
+    "filter_in": "icmp || tcp || udp"
+}
