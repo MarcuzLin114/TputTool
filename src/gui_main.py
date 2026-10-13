@@ -19,8 +19,13 @@ import pyqtgraph as pg
 from network_worker import NetworkWorker
 from backend_functions import run_tshark_analysis
 
-# 設定日誌
-LOG_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "log"))
+# 判斷是打包環境還是源碼環境
+if getattr(sys, 'frozen', False):
+    APP_ROOT = os.path.dirname(sys.executable)
+else:
+    APP_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+
+LOG_DIR = os.path.join(APP_ROOT, "log")
 os.makedirs(LOG_DIR, exist_ok=True)
 
 logging_config = {
@@ -36,7 +41,7 @@ logging.basicConfig(**logging_config)
 logger = logging.getLogger("HandoverTester")
 
 class HandoverTester(QMainWindow):
-    CONFIG_FILE = "last_settings.json"
+    CONFIG_FILE = os.path.join(APP_ROOT, "last_settings.json")
 
     def __init__(self):
         super().__init__()
@@ -640,8 +645,7 @@ class HandoverTester(QMainWindow):
 
         # 歸檔至 log/<當次測試時間>/
         try:
-            src_dir = os.path.dirname(os.path.abspath(__file__))
-            log_base_dir = os.path.abspath(os.path.join(src_dir, "..", "log"))
+            log_base_dir = LOG_DIR  # 直接使用上方宣告的 LOG_DIR
             session_folder_name = getattr(self, 'current_session_folder', datetime.now().strftime("%Y%m%d_%H%M%S"))
             target_session_dir = os.path.join(log_base_dir, session_folder_name)
             os.makedirs(target_session_dir, exist_ok=True)
