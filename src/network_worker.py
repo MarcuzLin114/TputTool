@@ -223,9 +223,18 @@ class NetworkWorker(QThread):
                 if self.cfg.get('use_ping'):
                     self.logical_sn = (self.logical_sn + 1) % 65536
                     self.ping_sent += 1
-                    res = self.ping_tool.ping(self.cfg['ping_target'], self.session_id, self.logical_sn)
-                    lat = float(res) if res is not None else 0.0
-                    if res is not None:
+
+                    # 傳入指定網卡 IP
+                    ping_bind_ip = self.cfg.get('ping_bind_ip', '')
+                    res = self.ping_tool.ping(
+                        self.cfg['ping_target'], 
+                        self.session_id, 
+                        self.logical_sn,
+                        source_ip=ping_bind_ip
+                    )
+                    
+                    lat = float(res) if (res is not None and isinstance(res, (int, float))) else 0.0
+                    if res is not None and isinstance(res, (int, float)):
                         self.ping_success += 1
                         log_p = f"[{now_ts}] ID:{self.session_id} SN:{self.logical_sn} Reply: {lat}ms"
                     else:

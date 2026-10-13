@@ -44,26 +44,27 @@ class RawIcmpPing:
         answer = ~sum & 0xffff
         return answer
 
-    def ping(self, ip_addr, icmp_id, sequence_num, timeout=1):
+    def ping(self, ip_addr, icmp_id, sequence_num, timeout=1, source_ip=None):
         if self.icmp_proto is None:
             return "Error: Protocol initialization failed"
         try:
             my_socket = socket.socket(socket.AF_INET, socket.SOCK_RAW, self.icmp_proto)
+            # 若有指定對外網卡來源 IP，綁定該本機 IP
+            if source_ip and source_ip.strip():
+                my_socket.bind((source_ip.strip(), 0))
         except PermissionError:
             return "Error: Admin rights required"
+        except Exception as e:
+            return f"Error: Socket bind failed ({e})"
         
-        # 修正後的 ping 方法內部邏輯
-        # 1. 構造初始標頭 (Checksum 為 0)
+        # 1. 封包標頭 (Checksum 先填 0)
         header = struct.pack(">BBHHH", 8, 0, 0, icmp_id, sequence_num)
         data = b"RawPingData"
-
-        # 2. 計算包含 Data 的 Checksum
+        # 2. 計算 Data 與 Checksum
         my_checksum = self.checksum(header + data)
-
-        # 3. 重新封裝，將計算出的 Checksum 放入
+        # 3. 填入完整 Checksum
         header = struct.pack(">BBHHH", 8, 0, my_checksum, icmp_id, sequence_num)
         packet = header + data
-
         try:
             send_time = time.perf_counter()
             my_socket.sendto(packet, (ip_addr, 1))
@@ -72,6 +73,8 @@ class RawIcmpPing:
             recv_time = time.perf_counter()
             return round((recv_time - send_time) * 1000, 2)
         except socket.timeout:
+            return None
+        except Exception:
             return None
         finally:
             my_socket.close()

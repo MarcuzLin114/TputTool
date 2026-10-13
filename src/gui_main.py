@@ -215,6 +215,15 @@ class HandoverTester(QMainWindow):
         ping_grid.addWidget(QLabel("發送間隔 (s):"), 1, 0)
         self.ping_targetterval = QLineEdit("1")
         ping_grid.addWidget(self.ping_targetterval, 1, 1)
+
+        # [新增] Ping 指定介面下拉選單
+        self.ping_bind_combo = QComboBox()
+        self.ping_bind_combo.setEditable(True)
+        for label, ip in self.get_local_ipv4_interfaces():
+            self.ping_bind_combo.addItem(label, ip)
+        ping_grid.addWidget(QLabel("指定介面:"), 2, 0)
+        ping_grid.addWidget(self.ping_bind_combo, 2, 1)
+
         ping_main_vbox.addLayout(ping_grid)
 
         icmp_id_layout = QHBoxLayout()
@@ -334,6 +343,7 @@ class HandoverTester(QMainWindow):
             "udp_len": self.udp_len.text(),
             "ping_target": self.ping_target.text(),
             "ping_targetterval": self.ping_targetterval.text(),
+            "ping_bind_ip": self.ping_bind_combo.currentText(),
             "use_iperf": self.chk_iperf.isChecked(),
             "use_ping": self.chk_ping.isChecked(),
             "use_wireshark": self.chk_ws.isChecked(),
@@ -396,6 +406,14 @@ class HandoverTester(QMainWindow):
                     self.iperf_bind_combo.setCurrentText(saved_bind)
 
             self.on_mode_changed()
+
+            saved_ping_bind = s.get("ping_bind_ip", "")
+            if saved_ping_bind:
+                idx = self.ping_bind_combo.findText(saved_ping_bind)
+                if idx >= 0:
+                    self.ping_bind_combo.setCurrentIndex(idx)
+                else:
+                    self.ping_bind_combo.setCurrentText(saved_ping_bind)
         except Exception as e:
             print(f"讀取設定檔失敗: {e}")
 
@@ -417,6 +435,13 @@ class HandoverTester(QMainWindow):
 
         self.current_test_bind_ip = selected_ip if selected_ip else "Auto (Default)"
 
+        # 解析 Ping 指定網卡 IP
+        selected_ping_ip = self.ping_bind_combo.currentData()
+        if not selected_ping_ip:
+            typed = self.ping_bind_combo.currentText().strip()
+            selected_ping_ip = typed if typed and "自動" not in typed and "Default" not in typed else ""
+        self.current_test_ping_bind_ip = selected_ping_ip if selected_ping_ip else "Auto (Default)"
+
         config = {
             'use_iperf': self.chk_iperf.isChecked(),
             'use_ping': self.chk_ping.isChecked(),
@@ -426,6 +451,7 @@ class HandoverTester(QMainWindow):
             'wireshark_iface': self.iface_combo.currentText(),
             'wireshark_filter': self.filter_in.text(),
             'ping_target': self.ping_target.text(),
+            'ping_bind_ip': selected_ping_ip,  # <-- [新增] 傳入 Ping 綁定 IP
             'interval': self.ping_targetterval.text(),
             'mode': self.mode_sel.currentText(),
             'iperf_server': self.iperf_server.text(),
@@ -602,6 +628,7 @@ class HandoverTester(QMainWindow):
                         "測試開始時間", "測試結束時間", "總耗時 (秒)",
                         "本機 IP (Source IP)", "目標 IP (Ping Target)", "伺服器 IP (iperf Server)",
                         "ICMP 測試參數", "Interval", "SessionID",
+                        "Ping 指定介面:",
                         "ICMP 軟體統計", "ICMP 封包統計",
                         "iperf 測試參數", "上行埠 (UL Port):", "上行頻寬 (UL BW):", "下行埠 (DL Port):", "下行頻寬 (DL BW):",
                         "TargetTime:", "Protocol:", "Parallel:", "Window:",
@@ -619,6 +646,7 @@ class HandoverTester(QMainWindow):
                         self.ping_target.text(),
                         self.iperf_server.text(),
                         "", f"{self.ping_targetterval.text()}s", session_id,
+                        getattr(self, 'current_test_ping_bind_ip', 'Auto (Default)'),
                         icmp_sw_report, icmp_p_report,
                         "", self.iperf_ul_port.text(), ul_bw_display, self.iperf_dl_port.text(), dl_bw_display,
                         f"{self.iperf_time.text()}s", proto,
