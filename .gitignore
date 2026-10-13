@@ -8,3 +8,7 @@ log/
 *.xml
 *.log
 *.spec
+last_settings.json
+Handover_Report*
+Handover_Summary*
+Capture*.pcapng
