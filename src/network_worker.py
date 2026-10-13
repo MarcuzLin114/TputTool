@@ -163,11 +163,16 @@ class NetworkWorker(QThread):
         logger.info("網路測試執行緒啟動")
         start_time = time.time()
 
-        # 1. 啟動 Wireshark / TShark 抓包
+        # 1. 啟動 Wireshark / TShark 抓包 (每 1000KB 自動切換新檔)
         if self.cfg.get('use_wireshark'):
             self.pcap_path = f"Capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pcapng"
             iface_id = self.cfg['wireshark_iface'].split('.')[0]
-            tshark_cmd = ["tshark", "-i", iface_id, "-f", self.cfg['wireshark_filter'], "-w", self.pcap_path]
+            tshark_cmd = [
+                "tshark", "-i", iface_id,
+                "-f", self.cfg['wireshark_filter'],
+                "-b", "filesize:102400",  # 當滿 1000KB (約 1MB) 自動分檔
+                "-w", self.pcap_path
+            ]
             self.tshark_process = subprocess.Popen(
                 tshark_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 creationflags=subprocess.CREATE_NO_WINDOW
@@ -261,8 +266,24 @@ class NetworkWorker(QThread):
             if self.dl_process:
                 self.dl_process.terminate()
             if self.tshark_process:
-                time.sleep(0.5)
-                self.tshark_process.terminate()
+                try:
+                    self.tshark_process.terminate()
+                    self.tshark_process.wait(timeout=2)  # 等待 TShark 釋放檔案控制權
+                except Exception:
+                    pass
+
+            # ==================== [修正] 搜尋所有被分卷切出的 pcapng 檔案 ====================
+            actual_pcap = ""
+            if self.pcap_path:
+                import glob
+                base_name = os.path.splitext(self.pcap_path)[0]
+                # 搜尋形如 Capture_20261013_160000*.pcapng 的所有檔案
+                matched_pcaps = glob.glob(f"{base_name}*.pcapng")
+                if matched_pcaps:
+                    actual_pcap = matched_pcaps[0]  # 第一個或主要檔案供 TShark 解析
+                elif os.path.exists(self.pcap_path):
+                    actual_pcap = self.pcap_path
+            # ============================================================================
             self.stat_signal.emit(self.ping_sent, self.ping_success, self.pcap_path, self.session_id)
 
     def stop(self):

@@ -25,6 +25,9 @@ if getattr(sys, 'frozen', False):
 else:
     APP_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
+from logging.handlers import RotatingFileHandler  # <-- 引入 RotatingFileHandler
+
+# 設定日誌
 LOG_DIR = os.path.join(APP_ROOT, "log")
 os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -32,10 +35,16 @@ logging_config = {
     'level': logging.DEBUG,
     'format': '%(asctime)s [%(levelname)s] (%(threadName)-10s) %(message)s',
     'handlers': [
-        logging.FileHandler(os.path.join(LOG_DIR, "app_debug.log"), encoding='utf-8'),
+        # 當 app_debug.log 大於 1MB 時自動分割為 app_debug.log.1, app_debug.log.2 ...
+        RotatingFileHandler(
+            os.path.join(LOG_DIR, "app_debug.log"),
+            maxBytes=1 * 1024 * 1024,
+            backupCount=20,
+            encoding='utf-8'
+        ),
         logging.StreamHandler()
     ]
-}  # <-- 補齊此處的大括號
+}
 
 logging.basicConfig(**logging_config)
 logger = logging.getLogger("HandoverTester")
@@ -421,6 +430,31 @@ class HandoverTester(QMainWindow):
         self.save_current_settings()
         self.start_datetime = datetime.now()
         self.current_session_folder = self.start_datetime.strftime("%Y%m%d_%H%M%S")
+
+        # ==================== [新增] 初始化 1MB 數據分卷機制 ====================
+        # 取得當次測試專屬目錄路徑
+        self.session_dir = os.path.join(LOG_DIR, self.current_session_folder)
+        os.makedirs(self.session_dir, exist_ok=True)
+        
+        self.log_file_index = 1
+        self.current_csv_path = os.path.join(
+            self.session_dir, f"Handover_Data_{self.log_file_index:03d}.csv"
+        )
+        
+        # 建立首個分卷檔案並寫入標頭 (Header)
+        self.csv_headers = [
+            'Relative_Time_s',
+            'UL_Throughput_Mbps',
+            'DL_Throughput_Mbps',
+            'Latency_ms',
+            'System_Timestamp'
+        ]
+        with open(self.current_csv_path, 'w', encoding='utf-8-sig') as f:
+            f.write(','.join(self.csv_headers) + '\n')
+            
+        self.all_session_csv_files = [self.current_csv_path]
+        # =====================================================================
+
         self.test_data = []
         self.iperf_ul_cons.clear()
         self.iperf_dl_cons.clear()
@@ -481,6 +515,27 @@ class HandoverTester(QMainWindow):
         # 紀錄結構: [秒數, 上行Mbps, 下行Mbps, 延遲ms, 系統時間戳]
         self.test_data.append([round(elapsed, 2), thru_ul, thru_dl, lat, sys_ts])
 
+        # ==================== [新增] 即時寫入與 1MB 切割邏輯 ====================
+        try:
+            # 判斷當前檔案大小是否已達 1MB (1,048,576 Bytes)
+            if os.path.exists(self.current_csv_path) and os.path.getsize(self.current_csv_path) >= 1024 * 1024:
+                self.log_file_index += 1
+                self.current_csv_path = os.path.join(
+                    self.session_dir, f"Handover_Data_{self.log_file_index:03d}.csv"
+                )
+                with open(self.current_csv_path, 'w', encoding='utf-8-sig') as f:
+                    f.write(','.join(self.csv_headers) + '\n')
+                self.all_session_csv_files.append(self.current_csv_path)
+                logger.info(f"Log 超過 1MB，已自動分割至新檔案: {self.current_csv_path}")
+
+            # 即時追加該秒數據 (以逗號分隔寫入)
+            line_str = f"{round(elapsed, 2)},{thru_ul},{thru_dl},{lat},{sys_ts}\n"
+            with open(self.current_csv_path, 'a', encoding='utf-8-sig') as f:
+                f.write(line_str)
+        except Exception as e:
+            logger.error(f"即時寫入數據失敗: {e}")
+        # =====================================================================
+
         if elapsed > 0:
             try:
                 numeric_arr = np.array([row[:4] for row in self.test_data], dtype=float)
@@ -513,37 +568,13 @@ class HandoverTester(QMainWindow):
             self.end_time_dt = datetime.now()
             self.start_time_dt = getattr(self, 'start_datetime', self.end_time_dt)
             self.total_duration_sec = (self.end_time_dt - self.start_time_dt).total_seconds()
-            self.generated_files = []
+            
+            # 將所有已產生的 1MB 分卷 CSV 加入歸檔清單
+            self.generated_files = list(getattr(self, 'all_session_csv_files', []))
 
+            # 將記憶體資料轉換為 DataFrame，供 handle_final_stats 計算統計摘要
             if self.test_data:
-                df = pd.DataFrame(self.test_data, columns=[
-                    'Relative_Time_s',
-                    'UL_Throughput_Mbps',
-                    'DL_Throughput_Mbps',
-                    'Latency_ms',
-                    'System_Timestamp'
-                ])
-
-                if self.chk_iperf.isChecked():
-                    valid_traffic = df[(df['UL_Throughput_Mbps'] > 0) | (df['DL_Throughput_Mbps'] > 0)]
-                    if not valid_traffic.empty:
-                        first_valid_idx = valid_traffic.index[0]
-                        df = df.loc[first_valid_idx:].reset_index(drop=True)
-                        if not df.empty:
-                            df['Relative_Time_s'] = round(df['Relative_Time_s'] - df['Relative_Time_s'].iloc[0], 2)
-                            try:
-                                self.start_time_dt = datetime.strptime(df['System_Timestamp'].iloc[0], "%Y-%m-%d %H:%M:%S.%f")
-                                self.total_duration_sec = (self.end_time_dt - self.start_time_dt).total_seconds()
-                            except Exception as e:
-                                logger.error(f"時間重新對齊解析失敗: {e}")
-                else:
-                    df['UL_Throughput_Mbps'] = "N/A"
-                    df['DL_Throughput_Mbps'] = "N/A"
-
-                self.file_id = int(time.time())
-                xlsx_path = f"Handover_Report_{self.file_id}.xlsx"
-                df.to_excel(xlsx_path, index=False)
-                self.generated_files.append(xlsx_path)
+                df = pd.DataFrame(self.test_data, columns=self.csv_headers)
                 self.current_df = df
 
     def handle_final_stats(self, sent, success, pcap_path, session_id):
@@ -571,8 +602,12 @@ class HandoverTester(QMainWindow):
             p_rate = (p_loss / req * 100) if req > 0 else 0.00
             icmp_p_report = f"捕捉 Request: {req}, Reply: {rep}, 掉包率: {p_rate:.2f}%"
             report += f"{icmp_p_report}\n"
-            if hasattr(self, 'generated_files'):
-                self.generated_files.append(pcap_path)
+            # [修正] 找出所有相關的 pcapng 分卷檔案並加入清單
+            import glob
+            pcap_prefix = os.path.splitext(pcap_path)[0].split('_000')[0]  # 取得基本前綴
+            for p in glob.glob(f"{pcap_prefix}*.pcapng"):
+                if hasattr(self, 'generated_files') and p not in self.generated_files:
+                    self.generated_files.append(p)
         else:
             icmp_p_report = "無抓包資料"
             report += f"{icmp_p_report}\n"
@@ -673,10 +708,19 @@ class HandoverTester(QMainWindow):
 
         # 歸檔至 log/<當次測試時間>/
         try:
-            log_base_dir = LOG_DIR  # 直接使用上方宣告的 LOG_DIR
+            log_base_dir = LOG_DIR
             session_folder_name = getattr(self, 'current_session_folder', datetime.now().strftime("%Y%m%d_%H%M%S"))
             target_session_dir = os.path.join(log_base_dir, session_folder_name)
             os.makedirs(target_session_dir, exist_ok=True)
+
+            # [新增防護] 自動補抓當前工作目錄下所有符合該測試時間的 Capture 檔案
+            import glob
+            for stray_pcap in glob.glob(f"Capture_{session_folder_name}*.pcapng"):
+                if stray_pcap not in self.generated_files:
+                    self.generated_files.append(stray_pcap)
+
+            # 給予 Windows 系統 0.5 秒釋放檔案 handle
+            time.sleep(0.5)
 
             moved_files = []
             for file_path in getattr(self, 'generated_files', []):
