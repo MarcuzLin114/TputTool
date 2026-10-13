@@ -10,6 +10,41 @@ from backend_functions import RawIcmpPing # 修正匯入
 import logging
 logger = logging.getLogger("HandoverTester.Worker")
 
+import sys # 如果上方沒 import 到 sys，請確保有 import
+def get_iperf_path():
+    """動態計算 bin/iperf3 的執行檔路徑"""
+    if getattr(sys, 'frozen', False):
+        # PyInstaller 打包後執行：都在 _MEIPASS 的虛擬根目錄下
+        base_dir = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+        iperf_dir = os.path.join(base_dir, "bin")
+    else:
+        # 開發階段執行：當前檔案位於 src/ 下，需回到上一層找 bin/
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        iperf_dir = os.path.join(current_dir, "..", "bin")
+
+    iperf_name = "iperf3.exe" if os.name == "nt" else "iperf3"
+    return os.path.normpath(os.path.join(iperf_dir, iperf_name))
+
+def verify_iperf_version(iperf_path):
+    """確認執行的 iperf3 版本為 3.21 (cJSON 1.7.15)"""
+    if not os.path.exists(iperf_path):
+        raise FileNotFoundError(f"找不到指定的 iperf3 執行檔: {iperf_path}")
+
+    res = subprocess.run(
+        [iperf_path, "-v"],
+        capture_output=True,
+        text=True,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    )
+    version_output = res.stdout.strip()
+    expected_version = "iperf 3.21 (cJSON 1.7.15)"
+    
+    if expected_version not in version_output:
+        logger.error(f"iperf3 版本不符合！預期: '{expected_version}'，實際輸出:\n{version_output}")
+        raise RuntimeError(f"iperf3 版本驗證失敗: 必須為 {expected_version}")
+        
+    logger.info(f"iperf3 版本驗證成功: {expected_version}")
+
 class NetworkWorker(QThread):
     data_signal = pyqtSignal(float, float, float, str, str, str) 
     stat_signal = pyqtSignal(int, int, str, int)
@@ -52,9 +87,14 @@ class NetworkWorker(QThread):
     def build_iperf_cmd(self):
         """根據前端配置動態構建 iperf3 指令"""
         cfg = self.cfg
-        # 1. 共同參數
+        
+        # 1. 取得專案內 bin 目錄下的 iperf3 路徑並驗證
+        iperf_exe = get_iperf_path()
+        verify_iperf_version(iperf_exe)
+
+        # 2. 共同參數 (替換 "iperf3" 為 iperf_exe)
         cmd = [
-            "iperf3", 
+            iperf_exe, 
             "-c", cfg['iperf_server'],
             "-p", cfg['iperf_port'],
             "-b", cfg['iperf_bw'],
